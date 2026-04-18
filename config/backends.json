@@ -1,0 +1,8 @@
+{
+  "listen_addr": ":8000",
+  "backends": [
+    { "host": "backend1", "port": 9000 },
+    { "host": "backend2", "port": 9000 },
+    { "host": "backend3", "port": 9000 }
+  ]
+}
