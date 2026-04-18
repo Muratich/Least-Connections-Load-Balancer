@@ -1,0 +1,46 @@
+{
+  "machine_types": [
+    {
+      "name": "cnc",
+      "display_name": "CNC Machine",
+      "allowed_metrics": [
+        "temperature_c",
+        "spindle_rpm",
+        "completion_pct"
+      ],
+      "telemetry_interval_ms": 1000,
+      "run_duration_seconds": {
+        "min": 20,
+        "max": 45
+      }
+    },
+    {
+      "name": "conveyor",
+      "display_name": "Conveyor Belt",
+      "allowed_metrics": [
+        "motor_temp_c",
+        "belt_speed_mps",
+        "completion_pct"
+      ],
+      "telemetry_interval_ms": 1000,
+      "run_duration_seconds": {
+        "min": 30,
+        "max": 60
+      }
+    },
+    {
+      "name": "oven",
+      "display_name": "Industrial Oven",
+      "allowed_metrics": [
+        "chamber_temp_c",
+        "power_kw",
+        "completion_pct"
+      ],
+      "telemetry_interval_ms": 1000,
+      "run_duration_seconds": {
+        "min": 40,
+        "max": 90
+      }
+    }
+  ]
+}
