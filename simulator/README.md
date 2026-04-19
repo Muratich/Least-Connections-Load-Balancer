@@ -60,3 +60,57 @@ For the first stage, the shared config already defines:
 - allowed metric names per machine type;
 - default telemetry interval in milliseconds;
 - minimum and maximum job duration in seconds.
+
+## Python master
+
+The simulator now includes a stdlib-only Python master process. Run it from the repository root:
+
+```powershell
+python -m simulator --target-host 127.0.0.1 --target-port 8000 --http-addr 127.0.0.1:8100 --machine-config config/machine_types.json
+```
+
+Default ports:
+
+- TCP target: `127.0.0.1:8000` (load balancer)
+- HTTP master API: `127.0.0.1:8100`
+
+Open the simulator dashboard:
+
+```text
+http://127.0.0.1:8100/
+```
+
+### Master API
+
+- `GET /healthz`
+- `GET /api/config/machine-types`
+- `GET /api/status`
+- `GET /api/machines`
+- `PUT /api/load`
+- `POST /api/machines`
+- `POST /api/machines/{machine_id}/break`
+- `POST /api/stop`
+
+Example sustained load:
+
+```powershell
+Invoke-RestMethod -Method Put http://127.0.0.1:8100/api/load -ContentType "application/json" -Body '{"target_active":30,"spawn_rate_per_sec":3,"machine_mix":{"cnc":1,"conveyor":1,"oven":1}}'
+```
+
+Example one-shot clients:
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8100/api/machines -ContentType "application/json" -Body '{"count":3,"machine_type":"cnc","spawn_rate_per_sec":1}'
+```
+
+Stop sustained load and gracefully finish active machines:
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8100/api/stop
+```
+
+Run simulator tests:
+
+```powershell
+python -m unittest discover simulator/tests
+```

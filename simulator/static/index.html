@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Factory Simulator</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Load simulator</p>
+        <h1>Factory Simulator</h1>
+      </div>
+      <div class="target-pill" id="targetPill">TCP target</div>
+    </header>
+
+    <main class="shell">
+      <section class="stats" aria-label="Simulator counters">
+        <article class="stat-card">
+          <span>Active</span>
+          <strong id="activeCount">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>Completed</span>
+          <strong id="completedCount">0</strong>
+        </article>
+        <article class="stat-card warning">
+          <span>Broken</span>
+          <strong id="brokenCount">0</strong>
+        </article>
+        <article class="stat-card danger">
+          <span>Failed</span>
+          <strong id="failedCount">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>Spawned</span>
+          <strong id="spawnedCount">0</strong>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <form class="panel control-panel" id="loadForm">
+          <div class="panel-head">
+            <h2>Sustained Load</h2>
+            <button class="primary" type="submit">Set</button>
+          </div>
+
+          <div class="control-grid">
+            <label>
+              <span>Target active</span>
+              <input id="targetActive" name="target_active" type="number" min="0" step="1" value="0">
+            </label>
+            <label>
+              <span>Spawn rate/sec</span>
+              <input id="spawnRate" name="spawn_rate_per_sec" type="number" min="0.1" step="0.1" value="1">
+            </label>
+            <label>
+              <span>Duration min</span>
+              <input id="durationMin" name="duration_min" type="number" min="0.1" step="0.1" placeholder="default">
+            </label>
+            <label>
+              <span>Duration max</span>
+              <input id="durationMax" name="duration_max" type="number" min="0.1" step="0.1" placeholder="default">
+            </label>
+            <label>
+              <span>Telemetry ms</span>
+              <input id="telemetryMs" name="telemetry_interval_ms" type="number" min="1" step="1" placeholder="default">
+            </label>
+            <label>
+              <span>Fault/min</span>
+              <input id="faultProbability" name="fault_probability_per_minute" type="number" min="0" max="1" step="0.01" value="0">
+            </label>
+          </div>
+
+          <fieldset class="mix" id="machineMix">
+            <legend>Machine Mix</legend>
+          </fieldset>
+
+          <div class="button-row">
+            <button type="button" class="quiet danger-button" id="stopButton">Stop</button>
+          </div>
+        </form>
+
+        <form class="panel manual-panel" id="manualForm">
+          <div class="panel-head">
+            <h2>One-Shot Machines</h2>
+            <button class="primary" type="submit">Spawn</button>
+          </div>
+          <div class="control-grid compact">
+            <label>
+              <span>Count</span>
+              <input id="manualCount" type="number" min="1" step="1" value="3">
+            </label>
+            <label>
+              <span>Type</span>
+              <select id="manualType"></select>
+            </label>
+            <label>
+              <span>Spawn rate/sec</span>
+              <input id="manualSpawnRate" type="number" min="0.1" step="0.1" value="1">
+            </label>
+            <label>
+              <span>Duration min</span>
+              <input id="manualDurationMin" type="number" min="0.1" step="0.1" placeholder="default">
+            </label>
+            <label>
+              <span>Duration max</span>
+              <input id="manualDurationMax" type="number" min="0.1" step="0.1" placeholder="default">
+            </label>
+            <label>
+              <span>Fault/min</span>
+              <input id="manualFaultProbability" type="number" min="0" max="1" step="0.01" value="0">
+            </label>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel monitor">
+        <div class="panel-head">
+          <h2>Machines</h2>
+          <div class="tabs" role="tablist" aria-label="Machine table view">
+            <button class="tab active" type="button" data-view="active">Active</button>
+            <button class="tab" type="button" data-view="recent">Recent</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Machine</th>
+                <th>Type</th>
+                <th>State</th>
+                <th>Age</th>
+                <th>Telemetry</th>
+                <th>Fault/min</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="machineRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
