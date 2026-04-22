@@ -172,6 +172,8 @@ class SimulatorController:
                 active_managed = sum(1 for runtime in self._active.values() if runtime.managed)
                 settings = self._settings
                 needed = max(0, settings.target_active - active_managed)
+                if settings.target_active == 0:
+                    needed = 0
                 spawn_rate = settings.spawn_rate_per_sec
 
             for _ in range(needed):
