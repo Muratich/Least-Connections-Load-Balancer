@@ -90,17 +90,22 @@ class SimulatorController:
         machine_type_name = payload.get("machine_type")
         duration = _optional_duration(payload.get("duration_seconds"))
         interval = _optional_positive_int(payload.get("telemetry_interval_ms"), "telemetry_interval_ms")
-        fault_probability = _probability(payload.get("fault_probability_per_minute", 0.0))
+        max_duration_seconds = _optional_positive_float(payload.get("max_duration_seconds"), "max_duration_seconds")
 
         created: list[str] = []
         for index in range(count):
-            machine_type = self._get_machine_type(machine_type_name) if machine_type_name else self._choose_machine_type(None)
+            machine_type = (
+                self._get_machine_type(machine_type_name)
+                if machine_type_name
+                else self._choose_machine_type(None)
+            )
             runtime = await self._spawn_one(
                 machine_type=machine_type,
                 managed=False,
                 duration_seconds=choose_duration(machine_type, duration),
                 telemetry_interval_ms=interval or machine_type.telemetry_interval_ms,
-                fault_probability_per_minute=fault_probability,
+                fault_probability_per_minute=0.0,
+                max_duration_seconds=max_duration_seconds,
             )
             created.append(runtime.machine_id)
             if index < count - 1:
@@ -149,8 +154,17 @@ class SimulatorController:
         async with self._lock:
             active = [runtime.snapshot() for runtime in self._active.values()]
             recent = list(self._recent)
+
+        backends: list[str] = []
+        seen: set[str] = set()
+        for item in active + recent:
+            for backend in item.get("seen_backends", []) or []:
+                if backend not in seen:
+                    seen.add(backend)
+                    backends.append(backend)
+
         active.sort(key=lambda item: str(item["machine_id"]))
-        return {"active": active, "recent": recent}
+        return {"backends": backends, "active": active, "recent": recent}
 
     async def _maintain_loop(self) -> None:
         while not self._closed:
@@ -168,6 +182,7 @@ class SimulatorController:
                     duration_seconds=choose_duration(machine_type, settings.duration_seconds),
                     telemetry_interval_ms=settings.telemetry_interval_ms or machine_type.telemetry_interval_ms,
                     fault_probability_per_minute=settings.fault_probability_per_minute,
+                    max_duration_seconds=None,
                 )
                 await asyncio.sleep(1 / spawn_rate)
 
@@ -190,6 +205,7 @@ class SimulatorController:
         duration_seconds: float,
         telemetry_interval_ms: int,
         fault_probability_per_minute: float,
+        max_duration_seconds: float | None = None,
     ) -> MachineRuntime:
         async with self._lock:
             self._total_spawned += 1
@@ -202,6 +218,7 @@ class SimulatorController:
                 telemetry_interval_ms=telemetry_interval_ms,
                 fault_probability_per_minute=fault_probability_per_minute,
                 managed=managed,
+                max_duration_seconds=max_duration_seconds,
             )
             self._active[runtime.machine_id] = runtime
             task = asyncio.create_task(self._run_machine(runtime))
@@ -306,6 +323,13 @@ def _optional_positive_int(value: Any, field_name: str) -> int | None:
     parsed = _non_negative_int(value, field_name)
     if parsed <= 0:
         raise ValueError(f"{field_name} must be positive")
+    return parsed
+
+
+def _optional_positive_float(value: Any, field_name: str) -> float | None:
+    if value is None:
+        return None
+    parsed = _positive_float(value, field_name)
     return parsed
 
 

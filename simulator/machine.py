@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import random
 import time
+import json
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -28,6 +29,10 @@ class MachineRuntime:
     last_error: str | None = None
     stop_requested: bool = False
     break_requested: bool = False
+    
+    backend_addr: str | None = None
+    seen_backends: tuple[str, ...] = field(default_factory=tuple)
+    max_duration_seconds: float | None = None
 
     def snapshot(self) -> dict[str, object]:
         now = self.finished_at or time.time()
@@ -38,6 +43,8 @@ class MachineRuntime:
             "state": self.state,
             "managed": self.managed,
             "duration_seconds": round(self.duration_seconds, 3),
+            "backend_addr": self.backend_addr,
+            "seen_backends": list(self.seen_backends),
             "telemetry_interval_ms": self.telemetry_interval_ms,
             "fault_probability_per_minute": self.fault_probability_per_minute,
             "started_at": self.started_at,
@@ -45,35 +52,80 @@ class MachineRuntime:
             "age_seconds": round(now - self.started_at, 3),
             "telemetry_count": self.telemetry_count,
             "last_error": self.last_error,
+            "max_duration_seconds": self.max_duration_seconds,
         }
 
 
 class MachineRunner:
-    def __init__(self, target_host: str, target_port: int) -> None:
+    def __init__(self, target_host: str, target_port: int, max_in_flight: int = 24) -> None:
         self._target_host = target_host
         self._target_port = target_port
+        self._slots = asyncio.Semaphore(max_in_flight)
 
     async def run(self, runtime: MachineRuntime) -> None:
         writer: asyncio.StreamWriter | None = None
+        slot_acquired = False
         try:
+            normal_deadline = runtime.started_at + runtime.duration_seconds
+            max_deadline = (
+                runtime.started_at + runtime.max_duration_seconds
+                if runtime.max_duration_seconds is not None
+                else None
+            )
+            effective_deadline = min(normal_deadline, max_deadline) if max_deadline is not None else normal_deadline
+
+            remaining = effective_deadline - time.time()
+            if remaining <= 0:
+                runtime.state = "broken"
+                return
+
             reader, writer = await asyncio.open_connection(self._target_host, self._target_port)
-            del reader
+
+            try:
+                assigned = await asyncio.wait_for(reader.readline(), timeout=5)
+                if assigned:
+                    payload = json.loads(assigned.decode("utf-8"))
+                    if payload.get("event") == "assigned":
+                        backend = payload.get("backend")
+                        if backend:
+                            runtime.backend_addr = str(backend)
+                        backends = payload.get("backends")
+                        if isinstance(backends, list):
+                            runtime.seen_backends = tuple(str(item) for item in backends if item)
+            except (asyncio.TimeoutError, json.JSONDecodeError, OSError):
+                pass
+
+            try:
+                await asyncio.wait_for(self._slots.acquire(), timeout=remaining)
+            except asyncio.TimeoutError:
+                runtime.state = "broken"
+                return
+            slot_acquired = True
+
+            if time.time() >= effective_deadline:
+                runtime.state = "broken"
+                return
+
             await self._write_event(writer, runtime, "hello")
             runtime.state = "running"
 
             interval = runtime.telemetry_interval_ms / 1000
-            deadline = runtime.started_at + runtime.duration_seconds
 
-            while time.time() < deadline:
-                if runtime.break_requested or self._fault_happened(runtime, interval):
-                    runtime.break_requested = True
+            while True:
+                now = time.time()
+                if runtime.break_requested:
                     runtime.state = "broken"
                     return
                 if runtime.stop_requested:
                     runtime.state = "stopping"
+                    return
+                if now >= normal_deadline:
                     break
+                if max_deadline is not None and now >= max_deadline:
+                    runtime.state = "broken"
+                    return
 
-                progress = ((time.time() - runtime.started_at) / runtime.duration_seconds) * 100
+                progress = ((now - runtime.started_at) / runtime.duration_seconds) * 100
                 await self._write_event(
                     writer,
                     runtime,
@@ -82,10 +134,6 @@ class MachineRunner:
                 )
                 runtime.telemetry_count += 1
                 await asyncio.sleep(interval)
-
-            if runtime.break_requested:
-                runtime.state = "broken"
-                return
 
             await self._write_event(writer, runtime, "done")
             runtime.state = "completed"
@@ -97,6 +145,8 @@ class MachineRunner:
             raise
         finally:
             runtime.finished_at = time.time()
+            if slot_acquired:
+                self._slots.release()
             if writer is not None:
                 writer.close()
                 with contextlib.suppress(OSError, ConnectionError):

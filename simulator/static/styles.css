@@ -347,7 +347,99 @@ td {
   transform: translateY(0);
 }
 
+.backend-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.backend-card {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+
+.backend-card button {
+  min-height: 26px;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+}
+
+.backend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.backend-head span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.backend-card .table-wrap {
+  overflow-x: auto;
+}
+
+.backend-card table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.backend-card th,
+.backend-card td {
+  padding: 6px 4px;
+  font-size: 0.7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 2px solid currentColor;
+  font-weight: 800;
+  font-size: 0.7rem;
+  border-width: 1.5px;
+  text-transform: lowercase;
+}
+
+.state-badge.starting {
+  color: var(--green);
+  background: #eef7f3;
+}
+
+.state-badge.completed,
+.state-badge.running {
+  color: var(--green);
+  background: #eef7f3;
+}
+
+.state-badge.broken,
+.state-badge.stopping {
+  color: var(--amber);
+  background: #fff7e7;
+}
+
+.state-badge.failed {
+  color: var(--red);
+  background: #fff0ed;
+}
+
 @media (max-width: 900px) {
+  .backend-grid {
+    grid-template-columns: 1fr;
+  }
+
   .topbar {
     align-items: flex-start;
     flex-direction: column;

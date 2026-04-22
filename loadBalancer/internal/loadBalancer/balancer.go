@@ -2,6 +2,7 @@ package loadbalancer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -133,6 +134,18 @@ func (lb *LoadBalancer) handleClient(client net.Conn) {
 	}
 	defer backend.Close()
 
+	assignment, _ := json.Marshal(map[string]any{
+	"event":   "assigned",
+	"backend": backendAddr,
+	"backends": lb.backendAddrs(),
+	})
+	assignment = append(assignment, '\n')
+
+	if _, err := client.Write(assignment); err != nil {
+		log.Printf("Send assignment to %s failed: %v", clientAddr, err)
+		return
+	}
+	
 	done := make(chan struct{}, 2)
 
 	go func() {
@@ -180,4 +193,15 @@ func (lb *LoadBalancer) Serve(ctx context.Context, addr string) error {
 		lb.wg.Add(1)
 		go lb.handleClient(conn)
 	}
+}
+
+func (lb *LoadBalancer) backendAddrs() []string {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+
+	addrs := make([]string, 0, len(lb.backends))
+	for _, b := range lb.backends {
+		addrs = append(addrs, b.Addr())
+	}
+	return addrs
 }

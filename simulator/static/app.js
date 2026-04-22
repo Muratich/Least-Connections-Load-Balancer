@@ -1,19 +1,43 @@
 const state = {
   machineTypes: [],
   status: null,
-  machines: { active: [], recent: [] },
+  machines: { backends: [], active: [], recent: [] },
+  backends: [],
   view: "active",
   loadFormDirty: false,
 };
 
 const $ = (id) => document.getElementById(id);
 
+function formatDuration(machine) {
+  const seconds = Number(machine.duration_seconds || 0);
+  return `${seconds.toFixed(1)}s`;
+}
+
 function numberValue(id) {
-  const raw = $(id).value;
+  const el = $(id);
+  if (!el) {
+    return null;
+  }
+  const raw = el.value;
   if (raw === "") {
     return null;
   }
   return Number(raw);
+}
+
+function stateBadge(machine) {
+  const map = {
+    completed: { letter: "c", className: "completed" },
+    broken: { letter: "b", className: "broken" },
+    failed: { letter: "f", className: "failed" },
+    running: { letter: "r", className: "running" },
+    stopping: { letter: "s", className: "stopping" },
+    starting: { letter: "s", className: "starting" },
+  };
+
+  const item = map[machine.state] || map.running;
+  return `<span class="state-badge ${item.className}" title="${machine.state}">${item.letter}</span>`;
 }
 
 async function request(path, options = {}) {
@@ -51,7 +75,11 @@ function showToast(message) {
 function machineMixPayload() {
   const mix = {};
   state.machineTypes.forEach((type) => {
-    const value = Number($(`mix-${type.name}`).value);
+    const input = $(`mix-${type.name}`);
+    if (!input) {
+      return;
+    }
+    const value = Number(input.value);
     if (value > 0) {
       mix[type.name] = value;
     }
@@ -113,6 +141,7 @@ function renderStatus(options = {}) {
   if (!status) {
     return;
   }
+
   $("activeCount").textContent = status.active_count;
   $("completedCount").textContent = status.completed_count;
   $("brokenCount").textContent = status.broken_count;
@@ -134,30 +163,82 @@ function formatAge(machine) {
 }
 
 function renderMachines() {
-  const rows = $("machineRows");
-  rows.replaceChildren();
-  const machines = state.machines[state.view] || [];
+  const root = $("machineTables");
+  root.replaceChildren();
 
-  if (machines.length === 0) {
-    const row = document.createElement("tr");
-    row.innerHTML = `<td class="empty-row" colspan="7">No machines</td>`;
-    rows.append(row);
-    return;
-  }
+  const machines = state.machines[state.view] || [];
+  const backends = state.backends.length
+    ? [...state.backends]
+    : [...new Set(machines.map((m) => m.backend_addr).filter(Boolean))];
+
+  const grouped = new Map(backends.map((b) => [b, []]));
 
   machines.forEach((machine) => {
-    const row = document.createElement("tr");
-    const canBreak = state.view === "active" && !["broken", "failed", "stopping"].includes(machine.state);
-    row.innerHTML = `
-      <td>${machine.machine_id}</td>
-      <td>${machine.machine_type}</td>
-      <td><span class="state ${machine.state}">${machine.state}</span></td>
-      <td>${formatAge(machine)}</td>
-      <td>${machine.telemetry_count}</td>
-      <td>${machine.fault_probability_per_minute}</td>
-      <td>${canBreak ? `<button class="quiet danger-button" type="button" title="Break machine" data-break="${machine.machine_id}">Break</button>` : ""}</td>
+    const backend = machine.backend_addr || "unknown";
+    if (!grouped.has(backend)) {
+      grouped.set(backend, []);
+    }
+    grouped.get(backend).push(machine);
+  });
+
+  backends.forEach((backend) => {
+    const items = grouped.get(backend) || [];
+
+    const card = document.createElement("section");
+    card.className = "backend-card";
+
+    card.innerHTML = `
+      <div class="backend-head">
+        <h3>${backend}</h3>
+        <span>${items.length}</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>State</th>
+              <th>Age</th>
+              <th>Dur</th>
+              <th>Max</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     `;
-    rows.append(row);
+
+    const tbody = card.querySelector("tbody");
+
+    if (items.length === 0) {
+      const row = document.createElement("tr");
+      row.innerHTML = `<td colspan="6" class="empty-row">No machines</td>`;
+      tbody.append(row);
+    } else {
+      items.forEach((machine) => {
+        const row = document.createElement("tr");
+        const canBreak =
+          state.view === "active" &&
+          !["broken", "failed", "stopping"].includes(machine.state);
+
+        row.innerHTML = `
+          <td>${machine.machine_type}</td>
+          <td>${stateBadge(machine)}</td>
+          <td>${formatAge(machine)}</td>
+          <td>${formatDuration(machine)}</td>
+          <td>${machine.max_duration_seconds ?? "-"}</td>
+          <td>${
+            canBreak
+              ? `<button class="quiet danger-button" data-break="${machine.machine_id}">Break</button>`
+              : ""
+          }</td>
+        `;
+        tbody.append(row);
+      });
+    }
+
+    root.append(card);
   });
 }
 
@@ -169,6 +250,7 @@ async function refresh() {
     ]);
     state.status = status;
     state.machines = machines;
+    state.backends = machines.backends || [];
     renderStatus();
     renderMachines();
   } catch (error) {
@@ -191,17 +273,23 @@ $("loadForm").addEventListener("submit", async (event) => {
       target_active: numberValue("targetActive"),
       spawn_rate_per_sec: numberValue("spawnRate"),
       machine_mix: machineMixPayload(),
-      fault_probability_per_minute: numberValue("faultProbability") ?? 0,
     };
+    
     const duration = payloadWithDuration("duration");
     const telemetry = numberValue("telemetryMs");
+
     if (duration) {
       payload.duration_seconds = duration;
     }
     if (telemetry !== null) {
       payload.telemetry_interval_ms = telemetry;
     }
-    state.status = await request("/api/load", { method: "PUT", body: JSON.stringify(payload) });
+
+    state.status = await request("/api/load", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+
     state.loadFormDirty = false;
     renderStatus({ syncForm: true });
     showToast("Load updated");
@@ -220,17 +308,29 @@ $("manualForm").addEventListener("submit", async (event) => {
     const payload = {
       count: numberValue("manualCount"),
       spawn_rate_per_sec: numberValue("manualSpawnRate"),
-      fault_probability_per_minute: numberValue("manualFaultProbability") ?? 0,
     };
+
     const type = $("manualType").value;
     const duration = payloadWithDuration("manualDuration");
+    const maxDuration = numberValue("manualMaxDuration");
+    if (duration && maxDuration !== null && maxDuration < duration.max) {
+      showToast("Warning: max dur is below duration");
+    }
     if (type) {
       payload.machine_type = type;
     }
     if (duration) {
       payload.duration_seconds = duration;
     }
-    const result = await request("/api/machines", { method: "POST", body: JSON.stringify(payload) });
+    if (maxDuration !== null) {
+      payload.max_duration_seconds = maxDuration;
+    }
+
+    const result = await request("/api/machines", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+
     showToast(`Spawned ${result.created.length}`);
     await refresh();
   } catch (error) {
@@ -259,13 +359,16 @@ document.querySelector(".tabs").addEventListener("click", (event) => {
   renderMachines();
 });
 
-$("machineRows").addEventListener("click", async (event) => {
-  const button = event.target.closest("[data-break]");
-  if (!button) {
+$("machineTables").addEventListener("click", async (event) => {
+  const btn = event.target.closest("[data-break]");
+  if (!btn) {
     return;
   }
+
   try {
-    await request(`/api/machines/${encodeURIComponent(button.dataset.break)}/break`, { method: "POST" });
+    await request(`/api/machines/${encodeURIComponent(btn.dataset.break)}/break`, {
+      method: "POST",
+    });
     showToast("Machine broken");
     await refresh();
   } catch (error) {
