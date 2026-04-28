@@ -67,10 +67,12 @@ class SimulatorController:
 
         async with self._lock:
             runtimes = list(self._active.values())
+            tasks = list(self._tasks.values())
         for runtime in runtimes:
             runtime.stop_requested = True
 
-        tasks = list(self._tasks.values())
+        for task in tasks:
+            task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -133,8 +135,8 @@ class SimulatorController:
                 fault_probability_per_minute=self._settings.fault_probability_per_minute,
             )
             for runtime in self._active.values():
-                runtime.stop_requested = True
-                if runtime.state == "running":
+                runtime.drain_requested = True
+                if runtime.state in {"starting", "running"}:
                     runtime.state = "stopping"
         return await self.status()
 
@@ -193,7 +195,11 @@ class SimulatorController:
             await asyncio.sleep(0.1)
 
     async def _trim_excess_locked(self) -> None:
-        active_managed = [runtime for runtime in self._active.values() if runtime.managed]
+        active_managed = [
+            runtime
+            for runtime in self._active.values()
+            if runtime.managed and not runtime.drain_requested
+        ]
         excess = max(0, len(active_managed) - self._settings.target_active)
         for runtime in active_managed[:excess]:
             runtime.stop_requested = True

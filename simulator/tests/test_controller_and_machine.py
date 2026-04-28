@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import unittest
 
@@ -8,11 +9,12 @@ from simulator.machine import MachineRunner, MachineRuntime
 
 
 class FakeTCPServer:
-    def __init__(self) -> None:
+    def __init__(self, send_assignment: bool = False) -> None:
         self.server: asyncio.AbstractServer | None = None
         self.host = "127.0.0.1"
         self.port = 0
         self.connections: list[list[dict[str, object]]] = []
+        self.send_assignment = send_assignment
 
     async def start(self) -> None:
         self.server = await asyncio.start_server(self._handle, self.host, 0)
@@ -28,6 +30,18 @@ class FakeTCPServer:
         connection: list[dict[str, object]] = []
         self.connections.append(connection)
         try:
+            if self.send_assignment:
+                writer.write(
+                    json.dumps(
+                        {
+                            "event": "assigned",
+                            "backend": "127.0.0.1:9000",
+                            "backends": ["127.0.0.1:9000"],
+                        }
+                    ).encode("utf-8")
+                    + b"\n"
+                )
+                await writer.drain()
             while True:
                 line = await reader.readline()
                 if not line:
@@ -44,7 +58,10 @@ class FakeTCPServer:
 async def wait_for_condition(fn, timeout: float = 2.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
-        if fn():
+        result = fn()
+        if inspect.isawaitable(result):
+            result = await result
+        if result:
             return
         await asyncio.sleep(0.01)
     raise AssertionError("condition was not met before timeout")
@@ -115,9 +132,8 @@ class MachineRunnerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         await MachineRunner(self.server.host, self.server.port).run(runtime)
-        await wait_for_condition(lambda: bool(self.server.events()))
 
-        self.assertEqual(["hello"], self.server.events())
+        self.assertEqual([], self.server.events())
         self.assertEqual("broken", runtime.state)
 
 
@@ -135,7 +151,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
             await controller.spawn_manual({"count": 1, "machine_type": "missing"})
 
     async def test_target_controller_spawns_to_requested_active_count(self) -> None:
-        server = FakeTCPServer()
+        server = FakeTCPServer(send_assignment=True)
         await server.start()
         controller = SimulatorController(test_config(), server.host, server.port)
         await controller.start()
@@ -148,7 +164,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
                     "telemetry_interval_ms": 10,
                 }
             )
-            await wait_for_condition(lambda: len(server.connections) >= 2)
+            await wait_for_condition(lambda: server.events().count("hello") >= 2)
             status = await controller.status()
 
             self.assertEqual(2, status["active_count"])
@@ -156,6 +172,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
 
             await controller.stop_all()
             await wait_for_condition(lambda: "done" in server.events())
+            await wait_for_condition(lambda: _has_no_active(controller))
         finally:
             await controller.shutdown()
             await server.stop()
@@ -180,3 +197,44 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await controller.shutdown()
             await server.stop()
+
+    async def test_stop_all_clears_queued_starting_machines(self) -> None:
+        server = FakeTCPServer(send_assignment=True)
+        await server.start()
+        controller = SimulatorController(test_config(), server.host, server.port)
+        try:
+            await controller.spawn_manual(
+                {
+                    "count": 40,
+                    "machine_type": "cnc",
+                    "spawn_rate_per_sec": 1000,
+                    "duration_seconds": {"min": 1, "max": 1},
+                    "telemetry_interval_ms": 10,
+                }
+            )
+            await wait_for_condition(lambda: len(server.connections) >= 40)
+            await wait_for_condition(lambda: _has_starting_machines(controller))
+
+            await controller.stop_all()
+
+            await wait_for_condition(lambda: _active_count_at_most(controller, 24))
+            machines = await controller.machines()
+            self.assertNotIn("starting", [machine["state"] for machine in machines["active"]])
+        finally:
+            await controller.shutdown()
+            await server.stop()
+
+
+async def _has_no_active(controller: SimulatorController) -> bool:
+    status = await controller.status()
+    return status["active_count"] == 0
+
+
+async def _has_starting_machines(controller: SimulatorController) -> bool:
+    machines = await controller.machines()
+    return any(machine["state"] == "starting" for machine in machines["active"])
+
+
+async def _active_count_at_most(controller: SimulatorController, threshold: int) -> bool:
+    status = await controller.status()
+    return status["active_count"] <= threshold

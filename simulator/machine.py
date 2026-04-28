@@ -11,6 +11,8 @@ from .metrics import generate_metrics
 from .protocol import build_message, encode_line
 
 MachineState = Literal["starting", "running", "stopping", "completed", "broken", "failed"]
+ASSIGNMENT_PEEK_TIMEOUT_SECONDS = 0.01
+SLOT_POLL_TIMEOUT_SECONDS = 0.1
 
 
 @dataclass
@@ -28,8 +30,9 @@ class MachineRuntime:
     telemetry_count: int = 0
     last_error: str | None = None
     stop_requested: bool = False
+    drain_requested: bool = False
     break_requested: bool = False
-    
+
     backend_addr: str | None = None
     seen_backends: tuple[str, ...] = field(default_factory=tuple)
     max_duration_seconds: float | None = None
@@ -79,29 +82,20 @@ class MachineRunner:
                 runtime.state = "broken"
                 return
 
+            if self._abort_before_start(runtime):
+                return
+
             reader, writer = await asyncio.open_connection(self._target_host, self._target_port)
 
-            try:
-                assigned = await asyncio.wait_for(reader.readline(), timeout=5)
-                if assigned:
-                    payload = json.loads(assigned.decode("utf-8"))
-                    if payload.get("event") == "assigned":
-                        backend = payload.get("backend")
-                        if backend:
-                            runtime.backend_addr = str(backend)
-                        backends = payload.get("backends")
-                        if isinstance(backends, list):
-                            runtime.seen_backends = tuple(str(item) for item in backends if item)
-            except (asyncio.TimeoutError, json.JSONDecodeError, OSError):
-                pass
-
-            try:
-                await asyncio.wait_for(self._slots.acquire(), timeout=remaining)
-            except asyncio.TimeoutError:
-                runtime.state = "broken"
+            if not await self._capture_assignment(reader, runtime, effective_deadline):
                 return
-            slot_acquired = True
 
+            slot_acquired = await self._acquire_slot(runtime, effective_deadline)
+            if not slot_acquired:
+                return
+
+            if self._abort_before_start(runtime):
+                return
             if time.time() >= effective_deadline:
                 runtime.state = "broken"
                 return
@@ -119,6 +113,8 @@ class MachineRunner:
                 if runtime.stop_requested:
                     runtime.state = "stopping"
                     return
+                if runtime.drain_requested and runtime.state == "running":
+                    runtime.state = "stopping"
                 if now >= normal_deadline:
                     break
                 if max_deadline is not None and now >= max_deadline:
@@ -151,6 +147,78 @@ class MachineRunner:
                 writer.close()
                 with contextlib.suppress(OSError, ConnectionError):
                     await writer.wait_closed()
+
+    def _abort_before_start(self, runtime: MachineRuntime) -> bool:
+        if runtime.break_requested:
+            runtime.state = "broken"
+            return True
+        if runtime.stop_requested or runtime.drain_requested:
+            runtime.state = "stopping"
+            return True
+        return False
+
+    async def _capture_assignment(
+        self,
+        reader: asyncio.StreamReader,
+        runtime: MachineRuntime,
+        effective_deadline: float,
+    ) -> bool:
+        while True:
+            if self._abort_before_start(runtime):
+                return False
+
+            remaining = effective_deadline - time.time()
+            if remaining <= 0:
+                runtime.state = "broken"
+                return False
+
+            try:
+                assigned = await asyncio.wait_for(
+                    reader.readline(),
+                    timeout=min(ASSIGNMENT_PEEK_TIMEOUT_SECONDS, remaining),
+                )
+            except asyncio.TimeoutError:
+                return True
+            except OSError:
+                return True
+
+            if not assigned:
+                return True
+
+            try:
+                payload = json.loads(assigned.decode("utf-8"))
+            except json.JSONDecodeError:
+                return True
+
+            if payload.get("event") != "assigned":
+                return True
+
+            backend = payload.get("backend")
+            if backend:
+                runtime.backend_addr = str(backend)
+            backends = payload.get("backends")
+            if isinstance(backends, list):
+                runtime.seen_backends = tuple(str(item) for item in backends if item)
+            return True
+
+    async def _acquire_slot(self, runtime: MachineRuntime, effective_deadline: float) -> bool:
+        while True:
+            if self._abort_before_start(runtime):
+                return False
+
+            remaining = effective_deadline - time.time()
+            if remaining <= 0:
+                runtime.state = "broken"
+                return False
+
+            try:
+                await asyncio.wait_for(
+                    self._slots.acquire(),
+                    timeout=min(SLOT_POLL_TIMEOUT_SECONDS, remaining),
+                )
+                return True
+            except asyncio.TimeoutError:
+                continue
 
     async def _write_event(
         self,
